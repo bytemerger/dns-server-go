@@ -24,7 +24,6 @@ func (dnsMessage *DNSMessage) fromBuffer(buf *bytes.Buffer) {
 func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
 	dnsMessage.header.questionCount = uint16(len(dnsMessage.questions))
 	dnsMessage.header.answerCount = uint16(len(dnsMessage.answers))
-	dnsMessage.header.answerCount = uint16(len(dnsMessage.answers))
 
 	dnsMessage.header.encode(buf)
 
@@ -32,8 +31,8 @@ func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
 		question.encode(buf)
 	}
 
-	for _, ans := range dnsMessage.answers {
-		ans.encode(buf)
+	for _, answer := range dnsMessage.answers {
+		answer.encode(buf)
 	}
 
 }
@@ -203,7 +202,7 @@ func (record *Record) encode(buf *bytes.Buffer) {
 	recordByte = binary.BigEndian.AppendUint16(recordByte, record.class)
 	recordByte = binary.BigEndian.AppendUint32(recordByte, record.ttl)
 
-	recordByte = append(recordByte, byte(record.length))
+	recordByte = binary.BigEndian.AppendUint16(recordByte, uint16(record.length))
 	ipNumber, _ := strconv.Atoi(strings.Join(strings.Split(record.data, "."), ""))
 
 	recordByte = binary.BigEndian.AppendUint32(recordByte, uint32(ipNumber))
@@ -252,7 +251,7 @@ func main() {
 		})
 
 		dnsMessage.answers = append(dnsMessage.answers, Record{
-			name:   "codecrafter.io",
+			name:   "codecrafters.io",
 			qtype:  1,
 			class:  1,
 			ttl:    60,
