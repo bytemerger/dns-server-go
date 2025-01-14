@@ -21,6 +21,9 @@ func DnsMessagefromBuffer(buf *bytes.Buffer) *DNSMessage {
 	dnsMessage := new(DNSMessage)
 	dnsheader, _ := decodeHeaderFromBuffer(buf)
 	dnsMessage.header = dnsheader
+	for i := 0; i < int(dnsMessage.header.questionCount); i++ {
+		dnsMessage.questions = append(dnsMessage.questions, decodeQuestionFromBuffer(buf))
+	}
 	return dnsMessage
 }
 
@@ -171,8 +174,9 @@ func (question *Question) encode(buf *bytes.Buffer) {
 	buf.Write(questionByte)
 }
 
-func (question *Question) decode(buf *bytes.Buffer) {
+func decodeQuestionFromBuffer(buf *bytes.Buffer) Question {
 	labels := []string{}
+	question := Question{}
 	for {
 		b, err := buf.ReadByte()
 		if err != nil {
@@ -195,6 +199,8 @@ func (question *Question) decode(buf *bytes.Buffer) {
 	b3, _ := buf.ReadByte()
 	b4, _ := buf.ReadByte()
 	question.class = binary.BigEndian.Uint16([]byte{b3, b4})
+
+	return question
 }
 
 type Record struct {
@@ -267,13 +273,13 @@ func main() {
 		// response code not implemented for the response here
 		responseDNSMessage.header.responseCode = NOTIMP
 		responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
-			name:  "codecrafters.io",
+			name:  requestDNSMessage.questions[0].name,
 			qtype: 1,
 			class: 1,
 		})
 
 		responseDNSMessage.answers = append(responseDNSMessage.answers, Record{
-			name:   "codecrafters.io",
+			name:   requestDNSMessage.questions[0].name,
 			qtype:  1,
 			class:  1,
 			ttl:    60,
