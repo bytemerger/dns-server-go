@@ -251,14 +251,14 @@ func main() {
 			class: 1,
 		})
 
-		/* dnsMessage.answers = append(dnsMessage.answers, Record{
+		dnsMessage.answers = append(dnsMessage.answers, Record{
 			name:   "codecrafter.io",
 			qtype:  1,
 			class:  1,
 			ttl:    60,
 			length: 4,
 			data:   "8.8.8.8",
-		}) */
+		})
 
 		dnsMessage.writeToBuffer(response)
 		fmt.Println(response)
