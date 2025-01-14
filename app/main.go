@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,10 @@ func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
 
 	for _, question := range dnsMessage.questions {
 		question.encode(buf)
+	}
+
+	for _, ans := range dnsMessage.answers {
+		ans.encode(buf)
 	}
 
 }
@@ -185,7 +190,25 @@ type Record struct {
 	class  uint16
 	ttl    uint32
 	length uint16
-	data   []byte
+	data   string
+}
+
+func (record *Record) encode(buf *bytes.Buffer) {
+	recordByte := []byte{}
+
+	recordByte = append(recordByte, writeQName(record.name)...)
+
+	// append the question type
+	binary.BigEndian.AppendUint16(recordByte, record.qtype)
+	// append the question class
+	binary.BigEndian.AppendUint16(recordByte, record.class)
+	binary.BigEndian.AppendUint32(recordByte, record.ttl)
+
+	recordByte = append(recordByte, byte(record.length))
+	ipNumber, _ := strconv.Atoi(strings.Join(strings.Split(record.data, "."), ""))
+
+	binary.BigEndian.AppendUint32(recordByte, uint32(ipNumber))
+	buf.Write(recordByte)
 }
 
 func main() {
@@ -227,6 +250,15 @@ func main() {
 			name:  "codecrafter.io",
 			qtype: 1,
 			class: 1,
+		})
+
+		dnsMessage.answers = append(dnsMessage.answers, Record{
+			name:   "codecrafter.io",
+			qtype:  1,
+			class:  1,
+			ttl:    60,
+			length: 4,
+			data:   "8.8.8.8",
 		})
 
 		dnsMessage.writeToBuffer(response)
