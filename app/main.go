@@ -17,8 +17,11 @@ type DNSMessage struct {
 	answers   []Record
 }
 
-func (dnsMessage *DNSMessage) fromBuffer(buf *bytes.Buffer) {
-
+func DnsMessagefromBuffer(buf *bytes.Buffer) *DNSMessage {
+	dnsMessage := new(DNSMessage)
+	dnsheader, _ := decodeHeaderFromBuffer(buf)
+	dnsMessage.header = dnsheader
+	return dnsMessage
 }
 
 func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
@@ -37,6 +40,17 @@ func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
 
 }
 
+type RCODE int
+
+const (
+	NO_ERROR RCODE = iota
+	FORMERR
+	SERVFAIL
+	NXDOMAIN
+	NOTIMP
+	REFUSED
+)
+
 type Header struct {
 	id uint16
 	// QR
@@ -54,7 +68,7 @@ type Header struct {
 	// reserved bit (Z)
 	reserved uint8
 	// RCODE
-	responseCode uint8
+	responseCode RCODE
 	// QDCOUNT
 	questionCount uint16
 	// ANCOUNT
@@ -83,12 +97,13 @@ func (header Header) newEmptyHeader() Header {
 	}
 }
 
-func (header *Header) decode(buf *bytes.Buffer) error {
+func decodeHeaderFromBuffer(buf *bytes.Buffer) (Header, error) {
 	headerBytes := make([]byte, 12)
 	n, err := buf.Read(headerBytes)
+	header := Header{}
 
 	if n < 12 || err != nil {
-		return errors.New("Header could not be decoded")
+		return Header{}, errors.New("Header could not be decoded")
 	}
 
 	header.id = uint16(uint16(headerBytes[0])<<8 | uint16(headerBytes[1]))
@@ -97,7 +112,7 @@ func (header *Header) decode(buf *bytes.Buffer) error {
 
 	header.queryResponse = uint8(flags1>>7) > 0
 
-	header.operationCode = uint8(flags1 << 1 & 0xF0) // also the same with flags >> 3 & 0x0F
+	header.operationCode = uint8(flags1 >> 3 & 0x0F)
 
 	// starting from the back of the byte to get the booleans
 	header.recursionDesired = uint8(flags1&1<<0) > 0
@@ -111,14 +126,14 @@ func (header *Header) decode(buf *bytes.Buffer) error {
 	// reserved bit Z
 	header.reserved = uint8(flags2 << 1 & 0xE0) // 0xE0 keep only the first 3 bits
 
-	header.responseCode = uint8(flags2 & 0x0F)
+	header.responseCode = RCODE(flags2 & 0x0F)
 
 	header.questionCount = uint16(uint16(headerBytes[4])<<8 | uint16(headerBytes[5]))
 	header.answerCount = uint16(uint16(headerBytes[6])<<8 | uint16(headerBytes[7]))
 	header.authorityCount = uint16(uint16(headerBytes[8])<<8 | uint16(headerBytes[9]))
 	header.additionalCount = uint16(uint16(headerBytes[10])<<8 | uint16(headerBytes[11]))
 
-	return nil
+	return header, nil
 
 }
 
@@ -129,7 +144,7 @@ func (header *Header) encode(buf *bytes.Buffer) {
 	// 10000000
 	// 00001011...
 	headerBytes[2] = byte(boolToInt(header.queryResponse)<<7 | header.operationCode<<3 | boolToInt(header.authoritativeAnswer)<<2 | boolToInt(header.truncatedMessage)<<1 | boolToInt(header.recursionDesired)<<0)
-	headerBytes[3] = byte(boolToInt(header.recursionAvailable)<<7 | header.reserved<<3 | header.responseCode)
+	headerBytes[3] = byte(boolToInt(header.recursionAvailable)<<7 | header.reserved<<3 | uint8(header.responseCode))
 	binary.BigEndian.PutUint16(headerBytes[4:6], header.questionCount)
 	binary.BigEndian.PutUint16(headerBytes[6:8], header.answerCount)
 	binary.BigEndian.PutUint16(headerBytes[8:10], header.authorityCount)
@@ -238,19 +253,26 @@ func main() {
 		receivedData := string(buf[:size])
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
+		requestDNSMessage := DnsMessagefromBuffer(bytes.NewBuffer(buf))
+
 		// Create an empty response
 		//response := make([]byte, 512)
 		// you can also use bytes.Buffer{}
 		response := bytes.NewBuffer([]byte{})
-		dnsMessage := new(DNSMessage)
-		dnsMessage.header = dnsMessage.header.newEmptyHeader()
-		dnsMessage.questions = append(dnsMessage.questions, Question{
+		responseDNSMessage := new(DNSMessage)
+		responseDNSMessage.header = responseDNSMessage.header.newEmptyHeader()
+		responseDNSMessage.header.id = requestDNSMessage.header.id
+		responseDNSMessage.header.operationCode = requestDNSMessage.header.operationCode
+		responseDNSMessage.header.recursionDesired = requestDNSMessage.header.recursionDesired
+		// response code not implemented for the response here
+		responseDNSMessage.header.responseCode = NOTIMP
+		responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
 			name:  "codecrafters.io",
 			qtype: 1,
 			class: 1,
 		})
 
-		dnsMessage.answers = append(dnsMessage.answers, Record{
+		responseDNSMessage.answers = append(responseDNSMessage.answers, Record{
 			name:   "codecrafters.io",
 			qtype:  1,
 			class:  1,
@@ -259,7 +281,7 @@ func main() {
 			data:   "8.8.8.8",
 		})
 
-		dnsMessage.writeToBuffer(response)
+		responseDNSMessage.writeToBuffer(response)
 		fmt.Println(response)
 
 		_, err = udpConn.WriteToUDP(response.Bytes(), source)
