@@ -150,10 +150,9 @@ func (question *Question) encode(buf *bytes.Buffer) {
 
 	questionByte = append(questionByte, writeQName(question.name)...)
 
-	// append the question type
-	binary.BigEndian.AppendUint16(questionByte, question.qtype)
+	questionByte = binary.BigEndian.AppendUint16(questionByte, question.qtype)
 	// append the question class
-	binary.BigEndian.AppendUint16(questionByte, question.class)
+	questionByte = binary.BigEndian.AppendUint16(questionByte, question.class)
 
 	buf.Write(questionByte)
 }
@@ -199,15 +198,15 @@ func (record *Record) encode(buf *bytes.Buffer) {
 	recordByte = append(recordByte, writeQName(record.name)...)
 
 	// append the question type
-	binary.BigEndian.AppendUint16(recordByte, record.qtype)
+	recordByte = binary.BigEndian.AppendUint16(recordByte, record.qtype)
 	// append the question class
-	binary.BigEndian.AppendUint16(recordByte, record.class)
-	binary.BigEndian.AppendUint32(recordByte, record.ttl)
+	recordByte = binary.BigEndian.AppendUint16(recordByte, record.class)
+	recordByte = binary.BigEndian.AppendUint32(recordByte, record.ttl)
 
 	recordByte = append(recordByte, byte(record.length))
 	ipNumber, _ := strconv.Atoi(strings.Join(strings.Split(record.data, "."), ""))
 
-	binary.BigEndian.AppendUint32(recordByte, uint32(ipNumber))
+	recordByte = binary.BigEndian.AppendUint32(recordByte, uint32(ipNumber))
 	buf.Write(recordByte)
 }
 
@@ -247,7 +246,7 @@ func main() {
 		dnsMessage := new(DNSMessage)
 		dnsMessage.header = dnsMessage.header.newEmptyHeader()
 		dnsMessage.questions = append(dnsMessage.questions, Question{
-			name:  "codecrafter.io",
+			name:  "codecrafters.io",
 			qtype: 1,
 			class: 1,
 		})
