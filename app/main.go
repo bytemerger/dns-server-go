@@ -5,13 +5,32 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"strings"
 )
 
 type DNSMessage struct {
-	Header   Header
-	Question Question
-	Answer   []Record
+	header    Header
+	questions []Question
+	answers   []Record
+}
+
+func (dnsMessage *DNSMessage) fromBuffer(buf *bytes.Buffer) {
+
+}
+
+func (dnsMessage *DNSMessage) writeToBuffer(buf *bytes.Buffer) {
+	dnsMessage.header.questionCount = uint16(len(dnsMessage.questions))
+	dnsMessage.header.answerCount = uint16(len(dnsMessage.answers))
+	dnsMessage.header.answerCount = uint16(len(dnsMessage.answers))
+
+	dnsMessage.header.encode(buf)
+
+	for _, question := range dnsMessage.questions {
+		question.encode(buf)
+	}
+
 }
 
 type Header struct {
@@ -40,6 +59,24 @@ type Header struct {
 	authorityCount uint16
 	// ARCOUNT
 	additionalCount uint16
+}
+
+func (header Header) newEmptyHeader() Header {
+	return Header{
+		id:                  1234,
+		queryResponse:       true,
+		operationCode:       0,
+		authoritativeAnswer: false,
+		truncatedMessage:    false,
+		recursionDesired:    false,
+		recursionAvailable:  false,
+		reserved:            0,
+		responseCode:        0,
+		questionCount:       0,
+		answerCount:         0,
+		authorityCount:      0,
+		additionalCount:     0,
+	}
 }
 
 func (header *Header) decode(buf *bytes.Buffer) error {
@@ -103,8 +140,43 @@ type Question struct {
 	class uint16
 }
 
-func (question *Question) decode(buf *bytes.Buffer) {
+func (question *Question) encode(buf *bytes.Buffer) {
+	questionByte := []byte{}
 
+	questionByte = append(questionByte, writeQName(question.name)...)
+
+	// append the question type
+	binary.BigEndian.AppendUint16(questionByte, question.qtype)
+	// append the question class
+	binary.BigEndian.AppendUint16(questionByte, question.class)
+
+	buf.Write(questionByte)
+}
+
+func (question *Question) decode(buf *bytes.Buffer) {
+	labels := []string{}
+	for {
+		b, err := buf.ReadByte()
+		if err != nil {
+			if err.Error() != "EOF" {
+				log.Fatal(err)
+			}
+			break
+		}
+		if b == 0x00 {
+			break
+		}
+		labelByte := make([]byte, int(b))
+		buf.Read(labelByte)
+		labels = append(labels, string(labelByte))
+	}
+	question.name = strings.Join(labels, ".")
+	b1, _ := buf.ReadByte()
+	b2, _ := buf.ReadByte()
+	question.qtype = binary.BigEndian.Uint16([]byte{b1, b2})
+	b3, _ := buf.ReadByte()
+	b4, _ := buf.ReadByte()
+	question.class = binary.BigEndian.Uint16([]byte{b3, b4})
 }
 
 type Record struct {
@@ -146,21 +218,23 @@ func main() {
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
 		// Create an empty response
-		response := make([]byte, 12)
-		appendHeader(response[:])
+		//response := make([]byte, 512)
+		// you can also use bytes.Buffer{}
+		response := bytes.NewBuffer([]byte{})
+		dnsMessage := new(DNSMessage)
+		dnsMessage.header = dnsMessage.header.newEmptyHeader()
+		dnsMessage.questions = append(dnsMessage.questions, Question{
+			name:  "codecrafter.io",
+			qtype: 1,
+			class: 1,
+		})
 
+		dnsMessage.writeToBuffer(response)
 		fmt.Println(response)
 
-		_, err = udpConn.WriteToUDP(response, source)
+		_, err = udpConn.WriteToUDP(response.Bytes(), source)
 		if err != nil {
 			fmt.Println("Failed to send response:", err)
 		}
 	}
-}
-
-func appendHeader(buf []byte) []byte {
-	// write the packet ID since this is the only way to maintain state UDP
-	binary.BigEndian.PutUint16(buf[:2], 1234)
-	buf[2] = 1 << 7
-	return buf
 }
