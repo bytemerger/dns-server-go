@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -17,12 +15,16 @@ type DNSMessage struct {
 	answers   []Record
 }
 
-func DnsMessagefromBuffer(buf *bytes.Buffer) *DNSMessage {
+func DnsMessagefromBuffer(buf []byte) *DNSMessage {
 	dnsMessage := new(DNSMessage)
-	dnsheader, _ := decodeHeaderFromBuffer(buf)
+	dnsheader := decodeHeaderFromBuffer(buf)
 	dnsMessage.header = dnsheader
+	// offset for processing
+	offset := 12
 	for i := 0; i < int(dnsMessage.header.questionCount); i++ {
-		dnsMessage.questions = append(dnsMessage.questions, decodeQuestionFromBuffer(buf))
+		question, startProcessingIndex := decodeQuestionFromBuffer(buf, offset)
+		offset = offset + startProcessingIndex
+		dnsMessage.questions = append(dnsMessage.questions, question)
 	}
 	return dnsMessage
 }
@@ -100,14 +102,9 @@ func (header Header) newEmptyHeader() Header {
 	}
 }
 
-func decodeHeaderFromBuffer(buf *bytes.Buffer) (Header, error) {
-	headerBytes := make([]byte, 12)
-	n, err := buf.Read(headerBytes)
+func decodeHeaderFromBuffer(buf []byte) Header {
+	headerBytes := buf[:12]
 	header := Header{}
-
-	if n < 12 || err != nil {
-		return Header{}, errors.New("Header could not be decoded")
-	}
 
 	header.id = uint16(uint16(headerBytes[0])<<8 | uint16(headerBytes[1]))
 	flags1 := headerBytes[2]
@@ -136,7 +133,7 @@ func decodeHeaderFromBuffer(buf *bytes.Buffer) (Header, error) {
 	header.authorityCount = uint16(uint16(headerBytes[8])<<8 | uint16(headerBytes[9]))
 	header.additionalCount = uint16(uint16(headerBytes[10])<<8 | uint16(headerBytes[11]))
 
-	return header, nil
+	return header
 
 }
 
@@ -146,8 +143,8 @@ func (header *Header) encode(buf *bytes.Buffer) {
 	headerBytes[1] = byte(header.id)
 	// 10000000
 	// 00001011...
-	headerBytes[2] = byte(boolToInt(header.queryResponse)<<7 | header.operationCode<<3 | boolToInt(header.authoritativeAnswer)<<2 | boolToInt(header.truncatedMessage)<<1 | boolToInt(header.recursionDesired)<<0)
-	headerBytes[3] = byte(boolToInt(header.recursionAvailable)<<7 | header.reserved<<3 | uint8(header.responseCode))
+	headerBytes[2] = byte(BoolToInt(header.queryResponse)<<7 | header.operationCode<<3 | BoolToInt(header.authoritativeAnswer)<<2 | BoolToInt(header.truncatedMessage)<<1 | BoolToInt(header.recursionDesired)<<0)
+	headerBytes[3] = byte(BoolToInt(header.recursionAvailable)<<7 | header.reserved<<3 | uint8(header.responseCode))
 	binary.BigEndian.PutUint16(headerBytes[4:6], header.questionCount)
 	binary.BigEndian.PutUint16(headerBytes[6:8], header.answerCount)
 	binary.BigEndian.PutUint16(headerBytes[8:10], header.authorityCount)
@@ -165,7 +162,7 @@ type Question struct {
 func (question *Question) encode(buf *bytes.Buffer) {
 	questionByte := []byte{}
 
-	questionByte = append(questionByte, writeQName(question.name)...)
+	questionByte = append(questionByte, WriteQName(question.name)...)
 
 	questionByte = binary.BigEndian.AppendUint16(questionByte, question.qtype)
 	// append the question class
@@ -174,33 +171,14 @@ func (question *Question) encode(buf *bytes.Buffer) {
 	buf.Write(questionByte)
 }
 
-func decodeQuestionFromBuffer(buf *bytes.Buffer) Question {
-	labels := []string{}
+func decodeQuestionFromBuffer(buf []byte, offset int) (Question, int) {
 	question := Question{}
-	for {
-		b, err := buf.ReadByte()
-		if err != nil {
-			if err.Error() != "EOF" {
-				log.Fatal(err)
-			}
-			break
-		}
-		if b == 0x00 {
-			break
-		}
-		labelByte := make([]byte, int(b))
-		buf.Read(labelByte)
-		labels = append(labels, string(labelByte))
-	}
-	question.name = strings.Join(labels, ".")
-	b1, _ := buf.ReadByte()
-	b2, _ := buf.ReadByte()
-	question.qtype = binary.BigEndian.Uint16([]byte{b1, b2})
-	b3, _ := buf.ReadByte()
-	b4, _ := buf.ReadByte()
-	question.class = binary.BigEndian.Uint16([]byte{b3, b4})
+	closingIndex := bytes.IndexByte(buf[offset:], 0x00)
+	question.name = GetDName(buf, offset)
+	question.qtype = binary.BigEndian.Uint16(buf[closingIndex+1 : closingIndex+3])
+	question.class = binary.BigEndian.Uint16(buf[closingIndex+3 : closingIndex+5])
 
-	return question
+	return question, int(closingIndex) + 5
 }
 
 type Record struct {
@@ -215,7 +193,7 @@ type Record struct {
 func (record *Record) encode(buf *bytes.Buffer) {
 	recordByte := []byte{}
 
-	recordByte = append(recordByte, writeQName(record.name)...)
+	recordByte = append(recordByte, WriteQName(record.name)...)
 
 	// append the question type
 	recordByte = binary.BigEndian.AppendUint16(recordByte, record.qtype)
@@ -256,10 +234,10 @@ func main() {
 			break
 		}
 
-		receivedData := string(buf[:size])
-		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
+		//receivedData := string(buf[:size])
+		//fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
-		requestDNSMessage := DnsMessagefromBuffer(bytes.NewBuffer(buf))
+		requestDNSMessage := DnsMessagefromBuffer(buf[:size])
 
 		// Create an empty response
 		//response := make([]byte, 512)
@@ -272,23 +250,32 @@ func main() {
 		responseDNSMessage.header.recursionDesired = requestDNSMessage.header.recursionDesired
 		// response code not implemented for the response here
 		responseDNSMessage.header.responseCode = NOTIMP
-		responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
+		/* responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
 			name:  requestDNSMessage.questions[0].name,
 			qtype: 1,
 			class: 1,
-		})
+		}) */
 
-		responseDNSMessage.answers = append(responseDNSMessage.answers, Record{
-			name:   requestDNSMessage.questions[0].name,
-			qtype:  1,
-			class:  1,
-			ttl:    60,
-			length: 4,
-			data:   "8.8.8.8",
-		})
+		for i := range requestDNSMessage.questions {
+			responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
+				name:  requestDNSMessage.questions[i].name,
+				qtype: 1,
+				class: 1,
+			})
+		}
+
+		for i := range requestDNSMessage.questions {
+			responseDNSMessage.answers = append(responseDNSMessage.answers, Record{
+				name:   requestDNSMessage.questions[i].name,
+				qtype:  1,
+				class:  1,
+				ttl:    60,
+				length: 4,
+				data:   "8.8.8.8",
+			})
+		}
 
 		responseDNSMessage.writeToBuffer(response)
-		fmt.Println(response)
 
 		_, err = udpConn.WriteToUDP(response.Bytes(), source)
 		if err != nil {
