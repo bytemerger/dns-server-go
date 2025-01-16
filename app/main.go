@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -23,8 +25,13 @@ func DnsMessagefromBuffer(buf []byte) *DNSMessage {
 	offset := 12
 	for i := 0; i < int(dnsMessage.header.questionCount); i++ {
 		question, startProcessingIndex := decodeQuestionFromBuffer(buf, offset)
-		offset = offset + startProcessingIndex
+		offset = startProcessingIndex
 		dnsMessage.questions = append(dnsMessage.questions, question)
+	}
+	for i := 0; i < int(dnsMessage.header.answerCount); i++ {
+		answer, startProcessingIndex := decodeRecordFromBuffer(buf, offset)
+		offset = startProcessingIndex
+		dnsMessage.answers = append(dnsMessage.answers, answer)
 	}
 	return dnsMessage
 }
@@ -84,7 +91,7 @@ type Header struct {
 	additionalCount uint16
 }
 
-func (header Header) newEmptyHeader() Header {
+func NewEmptyHeader() Header {
 	return Header{
 		id:                  1234,
 		queryResponse:       true,
@@ -173,7 +180,7 @@ func (question *Question) encode(buf *bytes.Buffer) {
 
 func decodeQuestionFromBuffer(buf []byte, offset int) (Question, int) {
 	question := Question{}
-	closingIndex := bytes.IndexByte(buf[offset:], 0x00)
+	closingIndex := bytes.IndexByte(buf[offset:], 0x00) + offset
 	question.name = GetDName(buf, offset)
 	question.qtype = binary.BigEndian.Uint16(buf[closingIndex+1 : closingIndex+3])
 	question.class = binary.BigEndian.Uint16(buf[closingIndex+3 : closingIndex+5])
@@ -202,15 +209,73 @@ func (record *Record) encode(buf *bytes.Buffer) {
 	recordByte = binary.BigEndian.AppendUint32(recordByte, record.ttl)
 
 	recordByte = binary.BigEndian.AppendUint16(recordByte, uint16(record.length))
-	ipNumber, _ := strconv.Atoi(strings.Join(strings.Split(record.data, "."), ""))
+	ipNumber := strings.Split(record.data, ".")
 
-	recordByte = binary.BigEndian.AppendUint32(recordByte, uint32(ipNumber))
+	ipByte := make([]byte, 4)
+	for i, byt := range ipNumber {
+		num, _ := strconv.Atoi(byt)
+		ipByte[i] = byte(num)
+	}
+	recordByte = append(recordByte, ipByte...)
 	buf.Write(recordByte)
 }
 
+func decodeRecordFromBuffer(buf []byte, offset int) (Record, int) {
+	record := Record{}
+	record.name = GetDName(buf, offset)
+	closingIndexForName := bytes.IndexByte(buf[offset:], 0x00) + offset
+
+	record.qtype = binary.BigEndian.Uint16(buf[closingIndexForName+1 : closingIndexForName+3])
+	record.class = binary.BigEndian.Uint16(buf[closingIndexForName+3 : closingIndexForName+5])
+
+	record.ttl = binary.BigEndian.Uint32(buf[closingIndexForName+5 : closingIndexForName+9])
+	record.length = binary.BigEndian.Uint16(buf[closingIndexForName+9 : closingIndexForName+11])
+	rawIP := binary.BigEndian.Uint32(buf[closingIndexForName+11 : closingIndexForName+15])
+	ipAddr := net.IPv4(byte(rawIP>>24), byte(rawIP>>16), byte(rawIP>>8), byte(rawIP))
+	record.data = ipAddr.String()
+	return record, int(closingIndexForName) + 15
+}
+
+func makeResolverRequest(resolvedUdp *net.UDPAddr, dnsMsg DNSMessage) *DNSMessage {
+	buf := bytes.NewBuffer([]byte{})
+	dnsMsg.writeToBuffer(buf)
+
+	conn, err := net.DialUDP("udp", nil, resolvedUdp)
+	if err != nil {
+		log.Fatal("cannot connect to the provided address")
+		os.Exit(1)
+	}
+	// send the the request which with is our supposed response
+	_, err = conn.Write(buf.Bytes())
+	if err != nil {
+		log.Fatal("could not send dns message request", err)
+		os.Exit(1)
+	}
+	udpServerRes := make([]byte, 512)
+	_, err = conn.Read(udpServerRes)
+	if err != nil {
+		fmt.Println("reading from the udp server did not work")
+	}
+	return DnsMessagefromBuffer(udpServerRes)
+}
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
+	var resolverUdpAddr *net.UDPAddr
+	if len(os.Args) >= 2 {
+		if os.Args[1] == "--resolver" {
+			if len(os.Args) == 3 {
+				var err error
+				if resolverUdpAddr, err = net.ResolveUDPAddr("udp", os.Args[2]); err != nil {
+					log.Fatal("Failed to resolve UDP address")
+				}
+			} else {
+				log.Fatal("too many args")
+			}
+		} else {
+			log.Fatal("unknown args")
+		}
+	}
 
 	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:2053")
 	if err != nil {
@@ -234,48 +299,70 @@ func main() {
 			break
 		}
 
-		//receivedData := string(buf[:size])
-		//fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
+		clientDNSMessage := DnsMessagefromBuffer(buf[:size])
 
-		requestDNSMessage := DnsMessagefromBuffer(buf[:size])
-
-		// Create an empty response
-		//response := make([]byte, 512)
-		// you can also use bytes.Buffer{}
+		finalResponse := []*DNSMessage{}
+		finalResponseMessage := new(DNSMessage)
 		response := bytes.NewBuffer([]byte{})
-		responseDNSMessage := new(DNSMessage)
-		responseDNSMessage.header = responseDNSMessage.header.newEmptyHeader()
-		responseDNSMessage.header.id = requestDNSMessage.header.id
-		responseDNSMessage.header.operationCode = requestDNSMessage.header.operationCode
-		responseDNSMessage.header.recursionDesired = requestDNSMessage.header.recursionDesired
-		// response code not implemented for the response here
-		responseDNSMessage.header.responseCode = NOTIMP
-		/* responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
-			name:  requestDNSMessage.questions[0].name,
-			qtype: 1,
-			class: 1,
-		}) */
+		if resolverUdpAddr == nil {
+			finalResponseMessage.header = NewEmptyHeader()
+			finalResponseMessage.header.id = clientDNSMessage.header.id
+			finalResponseMessage.header.operationCode = clientDNSMessage.header.operationCode
+			finalResponseMessage.header.recursionDesired = clientDNSMessage.header.recursionDesired
+			// response code not implemented for the response here
+			finalResponseMessage.header.responseCode = NOTIMP
+			for i := range clientDNSMessage.questions {
+				finalResponseMessage.questions = append(finalResponseMessage.questions, Question{
+					name:  clientDNSMessage.questions[i].name,
+					qtype: 1,
+					class: 1,
+				})
+			}
 
-		for i := range requestDNSMessage.questions {
-			responseDNSMessage.questions = append(responseDNSMessage.questions, Question{
-				name:  requestDNSMessage.questions[i].name,
-				qtype: 1,
-				class: 1,
-			})
+			for i := range clientDNSMessage.questions {
+				finalResponseMessage.answers = append(finalResponseMessage.answers, Record{
+					name:   clientDNSMessage.questions[i].name,
+					qtype:  1,
+					class:  1,
+					ttl:    60,
+					length: 4,
+					data:   "8.8.8.8",
+				})
+			}
+		} else {
+			for i := range clientDNSMessage.questions {
+				preResponseDNSMessage := new(DNSMessage)
+				preResponseDNSMessage.header = NewEmptyHeader()
+				preResponseDNSMessage.header.id = clientDNSMessage.header.id
+				preResponseDNSMessage.header.operationCode = 0
+				preResponseDNSMessage.header.recursionDesired = clientDNSMessage.header.recursionDesired
+				preResponseDNSMessage.header.queryResponse = false
+				if clientDNSMessage.header.operationCode == 0 {
+					preResponseDNSMessage.header.responseCode = 0
+				} else {
+					preResponseDNSMessage.header.responseCode = 4
+				}
+				// make request to recursive server with first question
+				preResponseDNSMessage.questions = append(preResponseDNSMessage.questions, Question{
+					name:  clientDNSMessage.questions[i].name,
+					qtype: 1,
+					class: 1,
+				})
+				r := makeResolverRequest(resolverUdpAddr, *preResponseDNSMessage)
+				finalResponse = append(finalResponse, r)
+			}
+			finalResponseMessage.header = NewEmptyHeader()
+			finalResponseMessage.header.id = clientDNSMessage.header.id
+			for _, dnsMes := range finalResponse {
+				finalResponseMessage.header.operationCode = clientDNSMessage.header.operationCode
+				finalResponseMessage.header.recursionDesired = clientDNSMessage.header.recursionDesired
+				finalResponseMessage.header.recursionAvailable = true
+				finalResponseMessage.header.responseCode = NOTIMP
+				finalResponseMessage.questions = append(finalResponseMessage.questions, dnsMes.questions[0])
+				finalResponseMessage.answers = append(finalResponseMessage.answers, dnsMes.answers[0])
+			}
 		}
-
-		for i := range requestDNSMessage.questions {
-			responseDNSMessage.answers = append(responseDNSMessage.answers, Record{
-				name:   requestDNSMessage.questions[i].name,
-				qtype:  1,
-				class:  1,
-				ttl:    60,
-				length: 4,
-				data:   "8.8.8.8",
-			})
-		}
-
-		responseDNSMessage.writeToBuffer(response)
+		finalResponseMessage.writeToBuffer(response)
 
 		_, err = udpConn.WriteToUDP(response.Bytes(), source)
 		if err != nil {

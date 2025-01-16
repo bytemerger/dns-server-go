@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 )
 
@@ -32,13 +31,14 @@ func GetDName(buf []byte, offset int) string {
 	for currentPosition < closingIndex {
 		labelChar := workingBuf[currentPosition]
 		if labelChar&0xC0 == 0xC0 {
-			fmt.Println("yes we have a comppressed hearder")
 			offset := uint16(uint16(workingBuf[currentPosition]<<2)<<8 | uint16(workingBuf[currentPosition+1]))
 			labels = append(labels, GetDName(buf, int(offset)))
 
+		} else {
+			labels = append(labels, string(workingBuf[currentPosition+1:int(labelChar)+currentPosition+1]))
 		}
-		labels = append(labels, string(workingBuf[currentPosition+1:int(labelChar)+currentPosition+1]))
 		currentPosition = currentPosition + int(labelChar) + 1
+
 	}
 
 	return strings.Join(labels, ".")
